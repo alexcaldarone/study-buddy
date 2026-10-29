@@ -74,7 +74,7 @@ empty.
 
 ## Using it
 
-**Select text** → a bubble appears with *Explain · Simpler · Quiz · Ask…*.
+**Select text** → a bubble appears with a highlighter pen, then *Explain · Simpler · Quiz · Ask…*.
 
 ![selection bubble](docs/bubble.png)
 
@@ -86,9 +86,13 @@ empty.
 - **Follow up** in the same box — the thread keeps the passage in context, and preset actions and
   typed questions mix freely in one conversation.
 - **PDFs work too** — papers open in the extension's own viewer, where text is selectable. See below.
-- **Highlights** — any passage you ask about is highlighted, and comes back the next time you open
-  the page. Click a highlight to reopen it with the whole conversation you had about it, and keep
-  asking; **Alt-click** to remove it (and its conversation).
+- **Highlights** — any passage you ask about is highlighted in the marker's yellow, and comes back
+  the next time you open the page. Click a highlight to reopen it with the whole conversation you
+  had about it, and keep asking; **Alt-click** to remove it (and its conversation).
+- **Plain highlights** — the **pen** at the left of the bubble (or `⌘⇧Y`, or *Highlight* in the
+  right-click menu) marks the passage in orange and nothing else happens: no question, nothing sent
+  anywhere, the panel stays as it was. Click one later to get the bubble back over it — ask about it
+  after all (it turns yellow and keeps the conversation) or **Remove** it.
 - **Notes** — every answer is filed in your study notes (`☰` in the panel header) as it arrives, so
   nothing is lost when you close the page. Click **Saved ✓** under an answer to take it back out.
 - **Whole page** — from the toolbar popup: *Summarize this page* or *Quiz me on the page*.
@@ -97,6 +101,7 @@ empty.
 | Shortcut | Action |
 | --- | --- |
 | `⌘⇧E` / `Ctrl+Shift+E` | Explain the current selection |
+| `⌘⇧Y` / `Ctrl+Shift+Y` | Highlight the current selection, no question asked |
 | `⌘⇧U` / `Ctrl+Shift+U` | Show / hide the panel |
 | `Esc` | Close the panel |
 | `Enter` | Send your question (`Shift+Enter` for a newline) |
@@ -155,7 +160,8 @@ text in the file to select.
 ## Notes and highlights
 
 `☰` in the panel (or *Notes* in the popup) opens the study-notes page: everything you saved,
-everything you highlighted, grouped by page, searchable, and exportable as one Markdown file.
+everything you highlighted, grouped by page, searchable, and exportable as one Markdown file (the
+notes first, then every highlight by page).
 
 ## Obsidian vault (prototype)
 

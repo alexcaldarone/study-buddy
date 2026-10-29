@@ -58,6 +58,13 @@
       },
       "description": "Explain the selected text"
     },
+    "highlight-selection": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "Command+Shift+Y"
+      },
+      "description": "Highlight the selected text, no question asked"
+    },
     "toggle-panel": {
       "suggested_key": {
         "default": "Ctrl+Shift+U",

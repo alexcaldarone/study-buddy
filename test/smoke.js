@@ -92,6 +92,8 @@ async function targets() {
   ], { stdio: ['ignore', 'pipe', 'pipe'] });
   const chromeLog = [];
   chrome.stderr.on('data', (d) => chromeLog.push(String(d)));
+  // A harness error must not leave a headless browser holding the debugging port for the next run.
+  process.on('exit', () => { try { chrome.kill(); } catch { /* already gone */ } });
 
   let ready = false;
   for (let i = 0; i < 40 && !ready; i++) {
@@ -394,6 +396,112 @@ async function targets() {
   const leftTurns = await sw.eval(`chrome.storage.local.get(${chatKey}).then((s) => (s[${chatKey}] || []).length)`);
   check('removing a highlight drops its conversation', keptTurns === 6 && leftTurns === 0, `stored ${keptTurns}, after Alt-click ${leftTurns}`);
 
+  // --- the pen: a plain highlight, no question asked
+  const inShadow = (selector) => `document.getElementById('claude-study-buddy-root').shadowRoot.querySelector('${selector}')`;
+  const pageHighlights = `chrome.storage.local.get('highlights').then((s) => s.highlights['http://localhost:${SITE_PORT}/'] || [])`;
+  const selectP2 = `(() => {
+    const node = document.getElementById('p2').firstChild;
+    const range = document.createRange();
+    range.setStart(node, 4); range.setEnd(node, 67);
+    const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    return sel.toString();
+  })()`;
+  await page.eval(selectP2);
+  await sleep(300);
+  const penBubble = await page.eval(`(() => {
+    const bubble = ${inShadow('.bubble')};
+    return { on: bubble.classList.contains('bubble--on'), mark: bubble.classList.contains('bubble--mark'), pen: getComputedStyle(bubble.querySelector('.pen')).display, remove: getComputedStyle(bubble.querySelector('.remove')).display };
+  })()`);
+  check('the bubble offers the pen on a fresh selection', penBubble.on && !penBubble.mark && penBubble.pen !== 'none' && penBubble.remove === 'none', JSON.stringify(penBubble));
+  await shot(page, 'bubble');
+  const turnsBefore = await page.eval(`document.getElementById('claude-study-buddy-root').shadowRoot.querySelectorAll('.turn').length`);
+  await page.eval(`${inShadow('.bubble .pen')}.click(); 'pen'`);
+  await sleep(400);
+  const penned = await page.eval(`(() => {
+    const shadow = document.getElementById('claude-study-buddy-root').shadowRoot;
+    const marks = [...document.querySelectorAll('mark.claude-study-highlight--plain')];
+    return {
+      marks: marks.length, text: marks.map((m) => m.textContent).join('').slice(0, 20),
+      bubble: shadow.querySelector('.bubble').classList.contains('bubble--on'),
+      panel: shadow.querySelector('.panel').classList.contains('panel--on'),
+      turns: shadow.querySelectorAll('.turn').length,
+      collapsed: getSelection().isCollapsed
+    };
+  })()`);
+  check('the pen marks the passage in the plain colour and gets out of the way',
+    penned.marks >= 1 && penned.text.startsWith('Calvin cycle') && !penned.bubble && penned.collapsed, JSON.stringify(penned));
+  check('the pen leaves the open conversation alone', penned.panel && penned.turns === turnsBefore, `turns ${turnsBefore} -> ${penned.turns}, panel ${penned.panel}`);
+  await shot(page, 'pen');
+  const plainStored = JSON.parse(await sw.eval(`${pageHighlights}.then((list) => JSON.stringify(list.map((h) => [h.kind || 'asked', h.text.slice(0, 12)])))`));
+  check('a plain highlight is stored as such', plainStored.some(([kind, text]) => kind === 'plain' && text === 'Calvin cycle'), JSON.stringify(plainStored));
+  const plainId = await page.eval(`document.querySelector('mark.claude-study-highlight--plain').dataset.hlId`);
+  const plainChat = await sw.eval(`chrome.storage.local.get('chat:${plainId}').then((s) => Object.keys(s).length)`);
+  check('a plain highlight has no conversation', plainChat === 0, `keys=${plainChat}`);
+
+  await page.send('Page.navigate', { url: `http://localhost:${SITE_PORT}/` });
+  await sleep(2000);
+  const plainBack = await page.eval(`(() => { const m = document.querySelector('mark.claude-study-highlight--plain'); return m ? m.textContent.slice(0, 12) : ''; })()`);
+  check('plain highlights come back after a reload, still plain', plainBack === 'Calvin cycle', JSON.stringify(plainBack));
+
+  // Clicking a plain highlight brings the bubble back, not the panel; Remove takes it out.
+  await page.eval(`document.querySelector('mark.claude-study-highlight--plain').click(); 'click'`);
+  await sleep(300);
+  const overMark = await page.eval(`(() => {
+    const shadow = document.getElementById('claude-study-buddy-root').shadowRoot;
+    const bubble = shadow.querySelector('.bubble');
+    return { on: bubble.classList.contains('bubble--on'), mark: bubble.classList.contains('bubble--mark'), remove: getComputedStyle(bubble.querySelector('.remove')).display, panel: shadow.querySelector('.panel').classList.contains('panel--on') };
+  })()`);
+  check('clicking a plain highlight offers the bubble with Remove, not the panel', overMark.on && overMark.mark && overMark.remove !== 'none' && !overMark.panel, JSON.stringify(overMark));
+  await page.eval(`${inShadow('.bubble .remove')}.click(); 'remove'`);
+  await sleep(400);
+  const afterRemove = {
+    marks: await page.eval(`document.querySelectorAll('mark.claude-study-highlight--plain').length`),
+    stored: await sw.eval(`${pageHighlights}.then((list) => list.filter((h) => h.kind === 'plain').length)`)
+  };
+  check('Remove drops a plain highlight from the page and from storage', afterRemove.marks === 0 && afterRemove.stored === 0, JSON.stringify(afterRemove));
+
+  // The menu item and the shortcut reach the same pen through the worker.
+  await page.eval(selectP2);
+  await sleep(200);
+  await sw.eval(`chrome.tabs.query({ url: 'http://localhost:${SITE_PORT}/*' }).then(([tab]) => chrome.tabs.sendMessage(tab.id, { type: 'run-action', action: 'highlight' }))`);
+  await sleep(400);
+  const viaWorker = await page.eval(`(() => { const m = document.querySelector('mark.claude-study-highlight--plain'); return m ? m.textContent.slice(0, 12) : ''; })()`);
+  check('the Highlight menu item and shortcut make a plain highlight', viaWorker === 'Calvin cycle', JSON.stringify(viaWorker));
+
+  // Asking about a plain highlight adopts it: still one mark, now a conversation highlight.
+  const marksBefore = await page.eval(`document.querySelectorAll('mark.claude-study-highlight').length`);
+  await page.eval(`getSelection().removeAllRanges(); document.querySelector('mark.claude-study-highlight--plain').click(); 'click'`);
+  await sleep(300);
+  await page.eval(`${inShadow('.bubble .primary')}.click(); 'explain'`);
+  await sleep(1400);
+  const promoted = await page.eval(`(() => {
+    const shadow = document.getElementById('claude-study-buddy-root').shadowRoot;
+    return {
+      marks: document.querySelectorAll('mark.claude-study-highlight').length,
+      plain: document.querySelectorAll('mark.claude-study-highlight--plain').length,
+      panel: shadow.querySelector('.panel').classList.contains('panel--on'),
+      asked: [...shadow.querySelectorAll('.turn--user')].map((t) => t.textContent).join('|'),
+      quote: shadow.querySelector('.quote p').textContent.slice(0, 12)
+    };
+  })()`);
+  const promotedReq = await sw.eval(`globalThis.__req.body.messages[0].content`);
+  const promotedStored = JSON.parse(await sw.eval(`${pageHighlights}.then((list) => JSON.stringify(list.map((h) => h.kind || 'asked')))`));
+  check('asking about a plain highlight reuses it as a conversation highlight',
+    promoted.marks === marksBefore && promoted.plain === 0 && promoted.panel && promoted.asked === 'Explain' && promoted.quote === 'Calvin cycle' && /Calvin cycle then fixes/.test(promotedReq) && !promotedStored.includes('plain'),
+    JSON.stringify({ ...promoted, before: marksBefore, stored: promotedStored }));
+  const promotedId = await page.eval(`document.querySelector('mark.claude-study-highlight').dataset.hlId`);
+  let promotedChat = 0;
+  for (let i = 0; i < 20 && !promotedChat; i++) {
+    await sleep(100);
+    promotedChat = await sw.eval(`chrome.storage.local.get('chat:${promotedId}').then((s) => (s['chat:${promotedId}'] || []).length)`);
+  }
+  check('the conversation attaches to the promoted highlight', promotedChat === 1, `exchanges=${promotedChat}`);
+  await page.eval(`document.querySelector('mark.claude-study-highlight').dispatchEvent(new MouseEvent('click', { bubbles: true, altKey: true })); 'remove'`);
+  await sleep(300);
+  const promotedLeft = await page.eval(`document.querySelectorAll('mark.claude-study-highlight').length + ':' + document.getElementById('p2').childNodes.length`);
+  check('Alt-click removes a promoted highlight and leaves the paragraph whole', promotedLeft === '0:1', promotedLeft);
+
   // long selection exposes the quote expander
   await page.eval(`(() => {
     const range = document.createRange();
@@ -402,7 +510,7 @@ async function targets() {
     document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
   })()`);
   await sleep(400);
-  await page.eval(`document.getElementById('claude-study-buddy-root').shadowRoot.querySelectorAll('.bubble button')[3].click(); 'panel'`);
+  await page.eval(`[...document.getElementById('claude-study-buddy-root').shadowRoot.querySelectorAll('.bubble button')].find((b) => b.textContent === 'Ask…').click(); 'panel'`);
   await sleep(300);
   const quoteState = await page.eval(`(() => {
     const s = document.getElementById('claude-study-buddy-root').shadowRoot;
@@ -421,7 +529,7 @@ async function targets() {
     document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
   })()`);
   await sleep(400);
-  await page.eval(`document.getElementById('claude-study-buddy-root').shadowRoot.querySelectorAll('.bubble button')[3].click(); 'ask'`);
+  await page.eval(`[...document.getElementById('claude-study-buddy-root').shadowRoot.querySelectorAll('.bubble button')].find((b) => b.textContent === 'Ask…').click(); 'ask'`);
   await sleep(200);
   const focused = await page.eval(`(() => { const s = document.getElementById('claude-study-buddy-root').shadowRoot;
     return s.activeElement === s.querySelector('.composer textarea'); })()`);
@@ -540,6 +648,31 @@ async function targets() {
 
     const stored = await sw.eval(`chrome.storage.local.get('highlights').then(s => Object.keys(s.highlights).join(','))`);
     check('PDF highlights are keyed by the document, not the viewer', stored.includes('/fixture.pdf'), stored);
+
+    // The pen works in the viewer too, and its marks survive a reload.
+    const pdfPenned = await pdf.eval(`(() => {
+      const spans = [...document.querySelectorAll('.page[data-page="1"] .textLayer span')]
+        .filter((s) => s.textContent.trim().length > 12 && !s.querySelector('mark') && !s.closest('mark') && !/chlorophyll/i.test(s.textContent));
+      const target = spans[0];
+      if (!target) return '';
+      const range = document.createRange();
+      range.selectNodeContents(target);
+      const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
+      document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+      return target.textContent;
+    })()`);
+    await sleep(400);
+    await pdf.eval(`document.getElementById('claude-study-buddy-root').shadowRoot.querySelector('.bubble .pen').click(); 'pen'`);
+    await sleep(400);
+    const pdfPlain = await pdf.eval(`[...document.querySelectorAll('.textLayer mark.claude-study-highlight--plain')].map((m) => m.textContent).join('')`);
+    check('the pen highlights PDF text', pdfPenned.trim().length > 12 && pdfPlain.trim() === pdfPenned.trim(), JSON.stringify({ picked: pdfPenned.slice(0, 40), marked: pdfPlain.slice(0, 40) }));
+    await pdf.send('Page.navigate', { url: viewerTarget.url });
+    let pdfPlainBack = 0;
+    for (let i = 0; i < 40 && pdfPlainBack === 0; i++) {
+      await sleep(300);
+      pdfPlainBack = await pdf.eval(`document.querySelectorAll('.textLayer mark.claude-study-highlight--plain').length`).catch(() => 0);
+    }
+    check('plain PDF highlights survive a reload', pdfPlainBack >= 1, `marks=${pdfPlainBack}`);
   }
 
   // a /pdf/ URL that isn't a PDF must not hijack the tab
