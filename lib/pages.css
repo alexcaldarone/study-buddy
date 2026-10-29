@@ -10,6 +10,8 @@
   --font-mono: "SB Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 
   --marker: #d4ff3a; --marker-soft: rgba(212, 255, 58, 0.55); --marker-edge: #a8d600;
+  /* The pen: the reader's own highlights, in a second marker colour. */
+  --pen: #ff9f43; --pen-soft: rgba(255, 159, 67, 0.5);
   --ink: #15142a;
 
   --surface: #ffffff; --sunken: #f5f4ee; --text: #15142a; --muted: #5c5b73; --faint: #9a98ac;

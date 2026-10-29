@@ -16,3 +16,16 @@ mark.claude-study-highlight.claude-study-highlight--active {
   background-image: linear-gradient(104deg, rgba(212, 255, 58, 0) 0.6%, rgba(212, 255, 58, 0.85) 2%, rgba(212, 255, 58, 0.72) 6%, rgba(212, 255, 58, 0.72) 94%, rgba(212, 255, 58, 0.9) 98%, rgba(212, 255, 58, 0) 99.4%);
   text-decoration: underline 2px rgba(21, 20, 42, 0.55); text-underline-offset: 3px;
 }
+
+/* The reader's own marks, made with the pen: a second marker, orange, so they never pass for a conversation. */
+mark.claude-study-highlight--plain {
+  background-image: linear-gradient(104deg, rgba(255, 159, 67, 0) 0.6%, rgba(255, 159, 67, 0.78) 2%, rgba(255, 159, 67, 0.55) 6%, rgba(255, 159, 67, 0.55) 94%, rgba(255, 159, 67, 0.8) 98%, rgba(255, 159, 67, 0) 99.4%);
+}
+mark.claude-study-highlight--plain.claude-study-highlight--active {
+  background-image: linear-gradient(104deg, rgba(255, 159, 67, 0) 0.6%, rgba(255, 159, 67, 0.92) 2%, rgba(255, 159, 67, 0.75) 6%, rgba(255, 159, 67, 0.75) 94%, rgba(255, 159, 67, 0.95) 98%, rgba(255, 159, 67, 0) 99.4%);
+}
+
+/* A fresh mark swipes in from the left, like the pen going over the line. */
+mark.claude-study-highlight--new { animation: claude-study-swipe 220ms ease-out; }
+@keyframes claude-study-swipe { from { background-size: 0% 72%; } }
+@media (prefers-reduced-motion: reduce) { mark.claude-study-highlight--new { animation: none; } }

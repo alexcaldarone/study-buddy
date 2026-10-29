@@ -156,7 +156,7 @@ function renderHighlights(list) {
       .sort((a, b) => b.createdAt - a.createdAt)
       .map((item) =>
         el('div', { class: 'hl' }, [
-          el('span', {}, [el('span', { class: 'swipe', text: item.text })]),
+          el('span', {}, [el('span', { class: item.kind === 'plain' ? 'swipe swipe--plain' : 'swipe', text: item.text })]),
           el('button', {
             class: 'ghost danger',
             text: 'Remove',
@@ -200,6 +200,15 @@ function exportMarkdown() {
     lines.push(`## ${note.title || note.url}`, '', `<${note.url}> — ${fmtDate(note.createdAt)}`, '');
     if (note.selection) lines.push('> ' + note.selection.replace(/\n/g, '\n> '), '');
     lines.push(note.answer, '', '---', '');
+  }
+  // Every highlight too, plain ones included, grouped by page in the order they were made.
+  const pages = Object.entries(state.highlights).filter(([, items]) => items && items.length);
+  if (pages.length) lines.push('# Highlights', '');
+  for (const [url, items] of pages) {
+    lines.push(`## ${items[0].title || url}`, '', `<${url}>`, '');
+    for (const item of [...items].sort((a, b) => a.createdAt - b.createdAt)) {
+      lines.push('> ' + item.text.replace(/\n/g, '\n> '), '');
+    }
   }
   const blob = new Blob([lines.join('\n')], { type: 'text/markdown' });
   const link = el('a', { href: URL.createObjectURL(blob), download: 'study-buddy-notes.md' });

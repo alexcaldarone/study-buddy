@@ -10,6 +10,11 @@
 
   const HOST_ID = 'claude-study-buddy-root';
   const HL_CLASS = 'claude-study-highlight';
+  /** A highlight made with the pen rather than by asking: its own marker colour, and no conversation behind it. */
+  const PLAIN_CLASS = HL_CLASS + '--plain';
+  /** Worn by a fresh mark just long enough to swipe in. */
+  const NEW_CLASS = HL_CLASS + '--new';
+  const PEN_SHORTCUT = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘⇧Y' : 'Ctrl+Shift+Y';
   const PORT_NAME = 'claude-study';
   /** Storage key prefix for a highlight's conversation: `chat:<highlightId>`. */
   const CHAT_PREFIX = 'chat:';
@@ -40,7 +45,7 @@
     shadow: null,
     panel: null,
     bubble: null,
-    pending: null, // { text, range, rect }
+    pending: null, // { text, range, rect, highlightId? } - the selection under the bubble
     subject: null, // { text, context, highlightId, isPage }
     thread: [], // API-shaped history
     exchanges: [], // { label, prompt, answer, model, usage, cost } - what gets stored per highlight
@@ -227,7 +232,7 @@
 
   /* --------------------------------------------------------- highlights */
 
-  function wrapRange(range, id) {
+  function wrapRange(range, id, plain) {
     const targets = [];
     const walker = document.createTreeWalker(
       range.commonAncestorContainer.nodeType === Node.TEXT_NODE
@@ -259,7 +264,7 @@
       if (start > 0) piece = piece.splitText(start);
       if (end - start < piece.nodeValue.length) piece.splitText(end - start);
       const mark = document.createElement('mark');
-      mark.className = HL_CLASS;
+      mark.className = plain ? `${HL_CLASS} ${PLAIN_CLASS}` : HL_CLASS;
       mark.dataset.hlId = id;
       piece.parentNode.insertBefore(mark, piece);
       mark.appendChild(piece);
@@ -294,8 +299,11 @@
     }
   }
 
-  /** Creates a highlight from a live range and remembers it for this URL. */
-  function createHighlight(range, text) {
+  /**
+   * Creates a highlight from a live range and remembers it for this URL.
+   * `kind` is 'plain' for the pen; a highlight made by asking carries no kind.
+   */
+  function createHighlight(range, text, kind) {
     const target = normalize(text);
     if (!target || target.length < 2) return null;
     const index = buildTextIndex();
@@ -312,9 +320,14 @@
     }
 
     const id = 'hl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-    const marks = wrapRange(range, id);
+    const marks = wrapRange(range, id, kind === 'plain');
     if (!marks.length) return null;
+    for (const mark of marks) {
+      mark.classList.add(NEW_CLASS);
+      mark.addEventListener('animationend', () => mark.classList.remove(NEW_CLASS), { once: true });
+    }
     const entry = { id, text: target, occurrence, createdAt: Date.now(), title: document.title };
+    if (kind === 'plain') entry.kind = 'plain';
     persistHighlight(entry);
     return entry;
   }
@@ -333,7 +346,7 @@
     if (at === -1) return false;
     const range = rangeFromNorm(index, at, at + entry.text.length);
     if (!range) return false;
-    return wrapRange(range, entry.id).length > 0;
+    return wrapRange(range, entry.id, entry.kind === 'plain').length > 0;
   }
 
   async function restoreAll() {
@@ -345,6 +358,40 @@
         /* page changed too much - skip this one */
       }
     }
+  }
+
+  /** Asking about a plain highlight turns it into a conversation highlight, marker colour included. */
+  async function promoteHighlight(id) {
+    const marks = document.querySelectorAll(`mark.${PLAIN_CLASS}[data-hl-id="${id}"]`);
+    if (!marks.length) return;
+    for (const mark of marks) mark.classList.remove(PLAIN_CLASS);
+    const { all, list } = await storedHighlights();
+    all[pageKey()] = list.map((h) => {
+      if (h.id !== id) return h;
+      const promoted = { ...h };
+      delete promoted.kind;
+      return promoted;
+    });
+    await chrome.storage.local.set({ highlights: all });
+  }
+
+  /**
+   * The pen: marks the selection and gets out of the way. The panel, and any
+   * answer still streaming into it, are left alone.
+   */
+  function highlightSelection(found) {
+    if (!found) return null;
+    let entry = null;
+    try {
+      entry = createHighlight(found.range, found.text, 'plain');
+    } catch {
+      /* unhighlightable DOM - not fatal */
+    }
+    // Drop the blue selection so the mark shows.
+    if (entry) window.getSelection()?.removeAllRanges();
+    state.pending = null;
+    hideBubble();
+    return entry;
   }
 
   /* ------------------------------------------------- selection plumbing */
@@ -416,6 +463,19 @@
     .bubble button:hover { background: rgba(255, 255, 255, 0.09); color: #fff; }
     .bubble .primary { background: #d4ff3a; color: #15142a; font-weight: 650; }
     .bubble .primary:hover { background: #e2ff72; color: #15142a; }
+    /* The pen: a second marker, drawn like the brand mark but in its own colour. */
+    .bubble .pen { display: inline-flex; align-items: center; padding: 6px 9px; }
+    .bubble .nib {
+      width: 15px; height: 9px; background: var(--pen); border-radius: 3px 1px 3px 1px;
+      transform: skewX(-18deg) rotate(-6deg); box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.14);
+      transition: transform 120ms ease;
+    }
+    .bubble .pen:hover .nib { transform: skewX(-18deg) rotate(-6deg) translateY(-1px); }
+    .bubble .sep { width: 1px; height: 16px; margin: 0 3px; background: rgba(255, 255, 255, 0.14); }
+    /* Over a plain highlight that already exists, the pen gives way to Remove. */
+    .bubble .remove { display: none; }
+    .bubble--mark .pen { display: none; }
+    .bubble--mark .remove { display: inline-block; }
 
     .panel {
       position: fixed; z-index: 2147483646; top: 76px; right: 20px;
@@ -533,7 +593,7 @@
       --font-display: "SB Display", "SB Sans", system-ui, sans-serif;
       --font-sans: "SB Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
       --font-mono: "SB Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-      --marker: #d4ff3a; --marker-soft: rgba(212, 255, 58, 0.6);
+      --marker: #d4ff3a; --marker-soft: rgba(212, 255, 58, 0.6); --pen: #ff9f43;
       --surface: #ffffff; --text: #15142a; --muted: #5c5b73; --faint: #9a98ac;
       --line: #e9e8ef; --line-strong: #d4d3de; --hover: #f1f0f5; --quote-bg: #f5f4ee; --code-bg: #f1f0f5;
       --input-bg: #ffffff; --accent: #2c46ef; --primary-bg: #15142a; --primary-ink: #d4ff3a;
@@ -556,6 +616,23 @@
     shadow.appendChild(el('style', { text: STYLES }));
 
     const bubble = el('div', { class: 'bubble' }, [
+      el('button', {
+        class: 'pen',
+        title: `Highlight (${PEN_SHORTCUT})`,
+        onclick: () => highlightSelection(state.pending)
+      }, [el('span', { class: 'nib' })]),
+      el('button', {
+        class: 'remove',
+        text: 'Remove',
+        title: 'Remove this highlight',
+        onclick: () => {
+          const id = state.pending && state.pending.highlightId;
+          state.pending = null;
+          hideBubble();
+          if (id) forgetHighlight(id);
+        }
+      }),
+      el('span', { class: 'sep' }),
       el('button', {
         class: 'primary',
         text: 'Explain',
@@ -662,10 +739,12 @@
 
   /* ------------------------------------------------------- panel state */
 
-  function showBubble(rect) {
+  /** `existing` puts the bubble over a plain highlight already on the page. */
+  function showBubble(rect, existing) {
     if (!settings.bubbleEnabled) return;
     mount();
     const bubble = state.bubble;
+    bubble.classList.toggle('bubble--mark', Boolean(existing));
     bubble.classList.add('bubble--on');
     const width = bubble.offsetWidth || 220;
     const left = Math.min(Math.max(8, rect.left + rect.width / 2 - width / 2), window.innerWidth - width - 8);
@@ -680,8 +759,9 @@
 
   function adoptPending() {
     if (!state.pending) return;
-    const { text, range } = state.pending;
-    setSubject({ text, context: contextAround(range, text), range });
+    const { text, range, highlightId } = state.pending;
+    // A plain highlight under the bubble is reused, not marked a second time.
+    setSubject({ text, context: contextAround(range, text), range: highlightId ? null : range, highlightId: highlightId || null });
   }
 
   function setSubject(subject) {
@@ -865,6 +945,7 @@
       state.subject.range = null;
       highlightActive(state.subject.highlightId);
     }
+    if (state.subject.highlightId) promoteHighlight(state.subject.highlightId).catch(() => {});
 
     const port = ensurePort();
     if (!port) {
@@ -1223,11 +1304,21 @@
       forgetHighlight(id);
       return;
     }
+    // A drag that starts and ends inside a mark is a selection, not a click on the mark.
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed) return;
     const marks = [...document.querySelectorAll(`mark.${HL_CLASS}[data-hl-id="${id}"]`)];
     const text = marks.map((node) => node.textContent).join('');
     const range = document.createRange();
     range.setStartBefore(marks[0]);
     range.setEndAfter(marks[marks.length - 1]);
+    if (mark.classList.contains(PLAIN_CLASS) && settings.bubbleEnabled) {
+      // Nothing to reopen: offer the same choices as a fresh selection, plus Remove.
+      clearTimeout(selectionTimer);
+      state.pending = { text, range, rect: range.getBoundingClientRect(), highlightId: id };
+      showBubble(state.pending.rect, true);
+      return;
+    }
     setSubject({ text, context: contextAround(range, text), highlightId: id });
     openPanel();
     restoreConversation(id);
@@ -1237,22 +1328,17 @@
     if (message?.type === 'run-action') {
       mount();
       const live = readSelection();
+      if (message.action === 'highlight') {
+        // The pen, from the menu or the shortcut: never touches the panel.
+        highlightSelection(live);
+        sendResponse({ ok: true });
+        return false;
+      }
       if (live) {
         state.pending = live;
         setSubject({ text: live.text, context: contextAround(live.range, live.text), range: live.range });
       } else if (message.selectionText && normalize(message.selectionText).length > 1) {
         setSubject({ text: message.selectionText, context: '' });
-      }
-      if (message.action === 'highlight') {
-        if (live) {
-          const entry = createHighlight(live.range, live.text);
-          if (entry) {
-            state.subject.highlightId = entry.id;
-            highlightActive(entry.id);
-          }
-        }
-        sendResponse({ ok: true });
-        return false;
       }
       ask({ action: message.action });
       sendResponse({ ok: true });

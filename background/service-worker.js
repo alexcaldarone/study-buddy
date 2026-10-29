@@ -761,7 +761,7 @@ function buildMenus() {
     chrome.contextMenus.create({
       id: 'action:highlight',
       parentId: 'claude-study-root',
-      title: 'Highlight (no question)',
+      title: 'Highlight',
       contexts: ['selection']
     });
     chrome.contextMenus.create({
@@ -821,6 +821,8 @@ chrome.commands.onCommand.addListener(async (command) => {
   if (!tab?.id) return;
   if (command === 'explain-selection') {
     sendToTab(tab.id, { type: 'run-action', action: 'explain' });
+  } else if (command === 'highlight-selection') {
+    sendToTab(tab.id, { type: 'run-action', action: 'highlight' });
   } else if (command === 'toggle-panel') {
     sendToTab(tab.id, { type: 'toggle-panel' });
   }
